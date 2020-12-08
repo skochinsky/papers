@@ -1,0 +1,140 @@
+{\rtf1\ansi\ansicpg1251\deff0\deflang1049{\fonttbl{\f0\fnil\fcharset0 Calibri;}{\f1\fnil\fcharset204 Calibri;}}
+{\colortbl ;\red0\green0\blue255;}
+{\*\generator Msftedit 5.41.21.2509;}\viewkind4\uc1\pard\sa200\sl276\slmult1\lang9\b\f0\fs36 Introduction\b0\fs22\par
+Currently there is a lot of interest into reverse engineering consumer electronics and other embedded devices. There were some talks and presentations at security conferences, but most of them are about just a single aspect and aimed at people already familiar with the subject. Not many resources are available for those who are just starting out and know only PC software reverse engineering.\par
+I have tried to fill this gap and make a basic intro based on my own experience.\b\fs40\par
+\fs36 Getting inside\b0\par
+\fs22 One of the first steps necessary in embedded reverse engineering is getting the actual code that runs on the device. There are several ways to do it, some easier and some harder.\par
+\b\fs28 1. Firmware updates\par
+\b0\fs22 Many embedded devices get firmware updates from the manufactures in their life cycle. If those updates are not encrypted or slightly obfuscated, they are the easiest way to get the code. If you're lucky, this is the simplest way, and sometimes does not even require physical access to the device.\par
+Usually an update consists of an updater program (mostly for Windows) and the firmware image or images, either as separate files or embedded into the executable. The updater program, when executed, switches the device into the update mode and then sends the images. Sometimes the update is just the image, which should be copied to the device and will be recognized by it by the filename or file contents.\par
+Some real examples of firmware updates:\par
+a) Sony Librie.\line The update consists of the updater program (UPLIBRIE.exe and EBRCTR.dll) and the firmware file (data.bin). The firmware file is obfuscated with a XOR key, which, luckuly, can be easily found in the executable. Inside there are images of the Linux kernel and the CRAMFS filesystem.\line b) Sony Reader PRS-500.\line The update includes the updater program ("PRS-500 Updater.exe" with a bunch of supporting files) and plain-text CRAMFS images of the filesystems.\line c) Intel SSD drive\line The firmware update is a CD ISO, which contains a FreeDOS system with a DOS-based firmware updater. The plain-text firmware images are embedded inside the exe as byte arrays and need to be identified by following the updater logic.\line d) Amazon Kindle\line The firmware update is a .bin file. The file needs to be copied to the device and, after it's recognized by the unit, the update procedure has to be triggered by the user. The file has an idenitifying header and is followed by an obfuscated .tgz image which is extracted and executed on the device. It is not easy to uncover the obfuscation as the de-obfuscation is done completely on the device. (In fact, the code was recovered another way, see below.)\line e) Sony Walkman NWZ-X1000\line The firmware update is an updater program (FWUpdater.exe plus some DLLs) and the firmware image NW_WM_FW.UPG. The updater copies file to the device and sends a special USB command to begin the update. The update is encrypted with an unknown cypher, and so far I did not find a way to decrypt it.\par
+\b\fs28 2. Serial port.\b0\par
+\fs22 The serial port (UART) is used in most cases to help debugging the device during development. Since it's useful for diagnostics, it remains available even on production devices, though not often obvious. Once identified, it usually allows access to the bootloader and/or the main OS, which can then be used to get the actual code fron the device.\line\line 2.1. Finding out UART parameters\par
+Since UART is a asynchronous protocol, it's sensitive to timing and bit patters, and thus you need to know the correct baud rate, stop bits and parity configuration, or you'll get garbage output. For this, the best source is the Linux and/or bootloader sources which most manufacturers have to provide because of GPL. Search the sources for "uart", "serial" and "console". Another way is to download the official sources of the same or similar version and do a file compare with the manufacturer's. This way you'll find what they have changed or added, and often this will include the initialization of the UART. Sometimes it can be mentioned in plain text (e.g. "115200 8n1"), and sometimes you'll need to figure it out from the values loaded into the registers and the processor datasheet. However, even if you don't succeed in that or there are no sources, here are most common configurations:\line 1) For Linux and U-Boot the most common setting is 115200 baud, 8 data bits, no parity, 1 stop bit\line 2) For Windows CE, the usual config is 38400 baud, 8n1.\par
+2.2. The cable\par
+To actually communicate with the device from PC, you'll need a serial cable. However, even if your PC still has a real COM port, you can't use it as-is. The PC's port operates with so-called "RS-232" voltage levels, which use up to +/-15V for logical one an zero. The embedded devices use "TTL" or "CMOS" levels (most common 0 and +3.3V), and so the direct connection in the best case just won't work and in worst case will burn the device. There are several ways you can overcome that.\par
+1) RS232 converter.\par
+There are chips available (most common is Maxim MAX232/3232), which convert RS232 levels to TTL and vice versa. You can either get the chip and solder one yourself, or get a ready-made level converter (plenty are available on eBay). Note that you will need to choose a correct chip or converter depending on the operating voltage of your device (3.3V or 5V).\par
+2) USB-TTL converter\par
+If your computer does not have a COM port, you can use a USB-TTL converter. Such converter plugs into the USB port on PC and is appears as a virtual COM port. Again, many such converters are available on eBay and electronic shops.\par
+3) Phone cable\par
+This is getting less viable as everyone is switching to USB, but a few years ago most mobile phones used serial connection to the PC. Thus most phone cables were not much more than level converters such as we need. If you have such a cable (you can also buy them in many places for a couple of bucks), you can usually use it as well. To identify the cable's pinout, either find the pinout for your phone's connector and match it, or use the following algorithm:\line a) connect the cable to PC so that it has power\line b) run a terminal program, connect to the COM port corresponding to the cable, and put something heavy on a key so that it keeps sending.\line c) briefly connect pairs of the cable's output wires until you see the pressed key echo on the screen. This way you will find the RX (receive) and TX (transmit) wires.\line d) with a multimemeter, measure voltages between one of the two pins and the rest. The voltage between GND and TX should be around 3.3V and sag slightly if you press and hold a key to send data, and voltage between GND and RX should be around 2.5V.\par
+For more explanations and examples see here: {\field{\*\fldinst{HYPERLINK "http://www.nslu2-linux.org/wiki/HowTo/AddASerialPort"}}{\fldrslt{\ul\cf1 http://www.nslu2-linux.org/wiki/HowTo/AddASerialPort}}}\f0\fs22\par
+2.3. Identification on board\par
+The most common UART encountered in current devices needs only three wires: GND (ground), RX (receive) and TX (transmit). It is often accompanied by a Vcc (supply) pin, so a good rule of thumb is to check any groups of four pads or pins on the board. However, it's not always the case, so sometimes you'll just have to do trial and error. If the pins are not obvious, try the following approach.\line 1) for ground, you can usually use any of the metallic shields commonly found on boards, including outer cover of USB or other connectors.\line 2) with the serial cable's GND connected to the ground, put the cable's RX pin to a potential TX pad on the board, and reset the device. If you got it right, you should see some output on the terminal program's screen. You can usually try several pads while device is booting to try and capture the boot log. Once TX is identified, fix the cable (e.g. with a bit of solder).\line 3) if you get to a login prompt (usually the case when the device is running Linux),  attach cable's TX to a potential RX pad and try pressing some keys in the terminal. Once you see them echoed on the screen, you've got it.\line 4) if you don't get a login prompt, you can try to stop in the bootloader. For that, attach cable's TX to a potential RX pad, reset the device, and immediately start pressing keys in the terminal. Many bootloaders check for a key press on boot and drop into interactive mode.\par
+2.4. Getting the code\par
+Once you identified the serial port, you can usually use the connection to get the actual code to the PC.\par
+1) Linux\par
+If you get to the login prompt, try the following logins/passwords: root/(no password), root/root, root/admin, root/(name of the device). Quite often this is enough to get inside. Once logged in, there are several ways to copy the code to PC\line a) if there is a parition on the device which is accessible from the PC (e.g. when USB is connected, or an SD card), you can just copy the files there, or even tar/gz the whole filesystem (if there is enough space). If nothing is mounted by default, try connecting USB to see if extra mounts appear. Also check /etc/fstab and/or init scripts for mentions of external filesystems.\line b) instead of copying separate files, often you can dump the complete flash image. Many Linux devices use MTD (memory technology devices) driver to abstract the flash chip from the system. If it is used, /proc/mtd contains the current flash map. It will be something like this (example from Sony Reader PRS-500):\par
+dev:    size      erasesize name\line mtd0:   00200000  00010000  "sdm device NOR 0"\line <...>\line mtd11:  00160000  00020000  "Linux0"\line mtd12:  007e0000  00020000  "Rootfs2"\line <...>\line\par
+From the sizes and names you can usually find out which partition you need. To get a specific partition, dd a file named /dev/mtdN. You can also download the complete image with all partitions (mdt0, and sometimes mtd1, check the size column).\par
+2) U-Boot.\par
+If you managed to drop into the bootloader by pressing a key shortly after reset, it's more likely than not is U-Boot. U-Boot is de facto standard bootloader on many ARM devices (and sometimes other architectures) and it offers a wide range of built-in commands. The first command you should try is 'help', it will list all available commands with short description. Often there are commands to work with flash partitions, sometimes even to copy things to/from an SD card. The actual commands depend on the device, but here's what I used to get the Amazon Kindle firmware:\line a) used "bbm show partition" to list the available partitions\line b) used "bbm load image 3" to load the partition 3 into RAM\line c) used "base NNNNN" and "md.b N MMM" commands to hex dump the RAM in smal chunks. I wrote a small script to automate this and gather the hex dumps into a final image.\par
+\b\fs28 3. Misusing the PC communication\par
+\b0\fs22 Sometimes the device uses a specialized program on the PC to communicate with it. It's worth reversing that program to discover the communication protocol and see if there are any backdoors or unforeseen ways it can be used to access the device. There usually no standard in such protocols so it has to be handled on case-by-case basis. I will list two real-life examples I encountered.\par
+1. Sony Reader PRS-500.\par
+The PRS-500 was bundles with the "Sony CONNECT Library" program that was necessary to copy ebooks to the device. I reversed it and discovered that ebooks were copied to the device into the directory "/Data/". In addition to the "write" command used for that, the protocol also included "read" and "delete" commands. I wrote a small Python script which used the program's DLLs to duplicate the communication. However, with my script I could specify any path, not just /Data, and I quicky found out that /proc/mtd and /dev/mtdNN were accessible and dumped them, thus getting the firmware image.\par
+2. Casio EX-word electronic dictionary.\par
+For those who purchased the dictionary, Casio offered free downloads of simple games that could be installed on it. I reversed the program that was used to upload them and discovered that the files were decrypted right before uploading. I duplicated the decryption and so got the plain-text executables of the games. Reversing them was not trivial because Casio did not use any known interface for system calls. However, by following references to the savefile name and the program logic, I eventually identified calls for "open file", and "write buffer to file". By patching the executable to use the RAM address of the main OS image instead of savefile buffer, encrypting the file back and uploading it, I was able to dump parts of the main OS to the savefile and copy them to PC.\par
+\b\fs28 4. JTAG\par
+\b0\fs22 JTAG stands for "Joint Test Action Group", but nowadays is almost always used to refer to the standard developed by the said group, known as IEEE 1149.1 "Standard Test Access Port and Boundary-Scan Architecture".\par
+Initially the standard was used only for testing PCB connectivity after they've been populated with the chips. The standard offered a way to set or test values on all the I/O pins of the device equipped with a JTAG connector. This allowed, for example, to set the pin values of one chip to a known pattern and check that the values of pins on another chip connected to it match what's expected by the connection schematics. This way wrong connection could be easily discovered without physical testing of each pair of connected pins.\par
+Since the protocol was quite flexible and allowed addition of extra commands, many processor manufacturers started to add commands for debugging. Almost any modern processor includes a JTAG module which allows almost complete control over what's happening inside it. You can halt the processor core, inspect and change its registers/cache/RAM, set breakpoints, inject instructions in the code stream and so on.\par
+4.1 JTAG adapter\par
+Simplest one can be made out of 5 resistors; uses LPT port\par
+Cheap adapters available using FT2232 chips\par
+Expensive adapters use a dedicated microcontroller, offer high speed\par
+4.2 Identification\par
+Look for groups of 2x10 pins\par
+Might be possible to trace from the main processor\par
+There are programs available that can brute-force the pinout. \par
+4.3 using boundary scan\par
+Boundary scan allows to set or read values on all the processor's pins, bypassing the core.\par
+Pins connected to flash are used to read the flash contents\par
+This technique requires knowlegde of the layout of the chip's boundary scan register\par
+See UrJTAG\par
+4.4 using debugging functionality\par
+Most ARM chips allow debugging using the JTAG.\par
+Allows inspection and changing of registers and processor state\par
+Instructions can be uploaded and executed\par
+A small snippet can be uploaded to read data from flash and send over JTAG\par
+See OpenOCD\par
+\b\fs28 5.Filesystems\par
+\b0\fs22 Embedded devices often use special filesystems not found on desktop PCs\par
+Most common: cramfs  squashfs yaffs  jffs2   minix  ext2fs\par
+\b cramfs\par
+\b0 Compressed ROM file-system\par
+Files are compressed with zlib.\par
+#define CRAMFS_MAGIC            0x28cd3d45      /* some random number */\par
+#define CRAMFS_SIGNATURE        "Compressed ROMFS"\par
+45 3D CD 28 00 00 01 00 \u9474? 00 00 00 00 00 00 00 00  E=\lang1049\f1\'cd(  \u9786?\par
+43 6F 6D 70 72 65 73 73 \u9474? 65 64 20 52 4F 4D 46 53  Compressed ROMFS\par
+\lang1033\f0 cramfsck to unpack\lang9\par
+\b SquashFS\par
+\b0 Another read-only filesystem\par
+Uses zlib or LZMA\par
+0x73717368 (sqsh), in little endian systems 68 73 71 73\par
+unsquashfs to unpack\par
+\b JFFS2\par
+\b0 Journalling Flash File System version 2\par
+Used for read/write filesystems\par
+Designed to reduce flash wear\par
+Offers several compression algorithms\par
+Magic: blocks begin with 0x1985 (85 19 in little-endian)\par
+Unpacking: official way involves mtd device on Linux\par
+Wrote a Python script to unpack images\par
+\b YAFFS\b0\par
+Yet Another Flash Filesystem\par
+Popularized by Google's Android\par
+Also designed for flash chips\par
+No dedicated magic value, tends to begin with 03 00 00 00 01 00 00 00 FF FF\par
+unyaffs to unpack\par
+\b Others\b0\par
+Ext2fs, minix, UBIFS\par
+\b Embedded Operating Systems\b0\par
+Embedded systems are often constrained by processing power and memory size\line\par
+On smaller devices some RTOS (Real-time OS) is usually used.\line RTOS provides basic functionality for running tasks (or threads), synchronization primitives, memory allocation, message passing and other useful APIs.\line Can be very small - from few KB\line Tasks are usually defined at compile time and get compiled into the image\line From the "big" OSes usually only Linux\par
+\b Linux\par
+\b0 Gets used more often lately\par
+Generaly needs an MMU (Memory Mapping Unit)\par
+MMU-less variant exists (uCLinux)\par
+Due to GPL, manufacturer has to provide sources; thus often easiest to reverse\par
+Bootloader: U-Boot is used\par
+Some new variations are actually Linux: Android, WebOS\par
+String "Linux" is usually present somewhere in the image\par
+\b Nucleus\par
+\b0 A small RTOS made by Mentor Graphics\line Distributed in source form; mostly written in C with few processor-specific parts\line Used in many mobile phones, especially Infineon chips (Siemens phones, iPhone baseband)\par
+Example ID string:  "Copyright (c) 1993-2002 ATI - Nucleus PLUS - Integrator ADS v. 1.13.4"\par
+\b VxWorks\par
+\b0 RTOS, made by Wind River Systems (bought by Intel in 2009)\par
+Used in some network appliances, set-top boxes, and even spacecraft (e.g. Mars rovers)\par
+"Copyright 1999-2001 Wind River Systems, Inc."\par
+\b Windows CE\par
+\b0 Written from scratch, RTOS with Win32 APIs.\par
+First versions were ported to ARM, MIPS, PowerPC, StrongARM, SuperH and x86.\par
+Current versions support only ARM and x86.\par
+Runs on Pocket PCs and Windows Mobile phones.\par
+Also on some other devices (GPS devices, Panasonic Words Gear)\par
+ID string: "ECEC" at offset 0x40 (for ARM)\par
+\b Other OSes\b0\par
+QNX\par
+ThreadX\par
+Symbian\par
+\b Embedded processors\par
+\b0 Distinguishing features:\par
+Microcontroller vs. microprocessor\par
+Peripherals, RAM, ROM on-chip\par
+RISC\par
+32-bit ARM MIPS PowerPC SuperH 68K\line 8-bit 8051, PIC, H8, AVR\par
+embedded processors:  differences with x86, ARM  MIPS  PowerPC  SuperH DSPs?\par
+Recognizing code: Typical opcodes\par
+Memory layout\par
+datasheets: memory map, reset config,  ABI\par
+ARM: \par
+disassembling images:  linux kernel, wince kernel,  elf files, modified files (PSP X360  PS3), Mach-O/iPhone, raw binary,  zlib scan\par
+determining load base:  relocation code  offset tables  string tables\par
+\par
+}
+ 
